@@ -3,21 +3,27 @@ import React from "react";
 function BreakdownList({ title, items }) {
   return (
     <div className="analytics-card">
-      <h3>{title}</h3>
+      <div className="analytics-card-head">
+        <h3>{title}</h3>
+        <span>{items.length ? `${items.length} kategori` : "Kosong"}</span>
+      </div>
       {items.length ? items.map((item) => (
         <div className="bar-row" key={item.label}>
           <span>{item.label}</span>
           <strong>{item.value}</strong>
         </div>
-      )) : <p>Belum ada data.</p>}
+      )) : <p className="mini-empty">Belum ada data untuk divisualisasikan.</p>}
     </div>
   );
 }
 
 function RiskList({ riskEvents }) {
   return (
-    <div className="analytics-card wide">
-      <h3>Event Berisiko</h3>
+    <div className="analytics-card wide risk-panel">
+      <div className="analytics-card-head">
+        <h3>Event Berisiko</h3>
+        <span>Operational watchlist</span>
+      </div>
       {riskEvents.length ? riskEvents.map(({ event, risk }) => (
         <div className="risk-row" key={event.id}>
           <div>
@@ -26,15 +32,18 @@ function RiskList({ riskEvents }) {
           </div>
           <span className={`risk-badge ${risk.level.toLowerCase()}`}>{risk.level}</span>
         </div>
-      )) : <p>Tidak ada event berisiko saat ini.</p>}
+      )) : <p className="mini-empty">Tidak ada event berisiko saat ini.</p>}
     </div>
   );
 }
 
 function FollowUpList({ recommendations }) {
   return (
-    <div className="analytics-card wide">
-      <h3>Follow-up Terbuka</h3>
+    <div className="analytics-card wide follow-panel">
+      <div className="analytics-card-head">
+        <h3>Follow-up Terbuka</h3>
+        <span>Action tracker</span>
+      </div>
       {recommendations.length ? recommendations.map((item, index) => (
         <div className="follow-row" key={`${item.eventId}-${index}`}>
           <div>
@@ -43,21 +52,28 @@ function FollowUpList({ recommendations }) {
           </div>
           <span>{item.dueDate || "Tanpa deadline"}</span>
         </div>
-      )) : <p>Tidak ada follow-up terbuka.</p>}
+      )) : <p className="mini-empty">Tidak ada follow-up terbuka.</p>}
     </div>
   );
 }
 
 export function AnalyticsPanel({ analytics }) {
   return (
-    <section className="panel">
-      <div className="section-title">
-        <h2>Analisa Tim</h2>
-        <span>Insight otomatis</span>
+    <section className="panel analytics-section">
+      <div className="section-title analytics-title">
+        <div>
+          <span className="eyebrow">Insight Otomatis</span>
+          <h2>Analisa Tim</h2>
+          <p>Insight otomatis untuk membantu tim bergerak lebih cepat dan terukur.</p>
+        </div>
+        <span className="workspace-badge">Insight otomatis</span>
       </div>
       <div className="insights">
-        {analytics.insights.map((item) => (
-          <div className="insight" key={item}>{item}</div>
+        {analytics.insights.map((item, index) => (
+          <div className="insight" key={item}>
+            <span>{index + 1}</span>
+            <p>{item}</p>
+          </div>
         ))}
       </div>
       <div className="analytics-grid">

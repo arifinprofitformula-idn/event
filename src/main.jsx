@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { AnalyticsPanel } from "./components/AnalyticsPanel.jsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
-import { UserBadge } from "./components/UserBadge.jsx";
 import { createEvent, DEFAULT_SETTINGS } from "./model.js";
 import { Dashboard } from "./pages/Dashboard.jsx";
 import { EventDetail } from "./pages/EventDetail.jsx";
@@ -192,11 +191,10 @@ function App() {
         onNew={openNewEvent}
         onExport={() => downloadText("events.csv", csvForEvents(safeEvents))}
         analytics={analytics}
+        session={session}
+        onLogout={handleLogout}
+        onSettings={() => setView("settings")}
       />
-      <UserBadge session={session} onLogout={handleLogout} />
-      <div className="floating-actions">
-        <button className="button secondary" onClick={() => setView("settings")}>Pengaturan</button>
-      </div>
       <AnalyticsPanel analytics={analytics} />
     </>
   );
