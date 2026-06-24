@@ -5,13 +5,14 @@ This app is now a Node.js production app:
 - React/Vite frontend is built into `dist/`.
 - `server/index.js` serves the frontend and backend API.
 - Auth uses hashed passwords and `HttpOnly` signed cookies.
-- Events, settings, and users are stored as JSON files under `DATA_DIR`.
+- Events, settings, and users are stored in MySQL.
 
 ## 1. Server Requirements
 
 - Node.js 20 or newer.
+- MySQL 5.7+/8.0+ or MariaDB 10.3+.
 - HTTPS reverse proxy such as Nginx/Caddy/Apache.
-- A persistent private data directory outside the public web root.
+- For shared hosting, the hosting account must support Node.js apps. Static/PHP-only hosting is not enough.
 
 ## 2. Upload Files
 
@@ -30,7 +31,28 @@ npm install
 npm run build
 ```
 
-## 3. Environment Variables
+If your shared hosting builds dependencies through cPanel Node.js App, upload the full project and run `npm install` from the Node app terminal.
+
+## 3. MySQL Database
+
+Create a MySQL database and user in cPanel or your hosting control panel.
+
+Example values:
+
+- Database: `cpaneluser_event_manager`
+- User: `cpaneluser_event_user`
+- Password: strong generated password
+- Host: usually `localhost`
+
+Give the user full privileges on the database.
+
+The app creates tables automatically on first boot. If your host blocks `CREATE TABLE`, import:
+
+```text
+docs/mysql-schema.sql
+```
+
+## 4. Environment Variables
 
 Create a production environment file or set these variables in your process manager:
 
@@ -41,17 +63,24 @@ AUTH_SECRET=replace-with-a-long-random-secret-at-least-32-chars
 ADMIN_NAME=Administrator
 ADMIN_EMAIL=owner@example.com
 ADMIN_PASSWORD=replace-with-a-strong-initial-password
-DATA_DIR=/var/lib/event-manager
 SESSION_HOURS=8
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=cpaneluser_event_user
+DB_PASSWORD=your_mysql_password
+DB_NAME=cpaneluser_event_manager
+DB_CONNECTION_LIMIT=10
+DB_SSL=false
 ```
 
 Important:
 
 - `AUTH_SECRET` must remain stable, otherwise existing sessions become invalid.
-- `ADMIN_PASSWORD` is used only when `users.json` does not exist yet.
-- Keep `DATA_DIR` private and backed up.
+- `ADMIN_PASSWORD` is used only when the `em_users` table has no users yet.
+- Do not commit real database credentials.
+- Back up your MySQL database regularly.
 
-## 4. Start The App
+## 5. Start The App
 
 Basic:
 
@@ -76,7 +105,26 @@ pm2 start server/index.js --name event-manager --env production
 
 Or create an `ecosystem.config.cjs` if your host supports PM2 config.
 
-## 5. Nginx Reverse Proxy
+## 6. Shared Hosting / cPanel Node.js App
+
+Typical setup:
+
+1. Create a Node.js app in cPanel.
+2. Set Application root to the uploaded project folder.
+3. Set Application startup file to:
+
+```text
+server/index.js
+```
+
+4. Set environment variables from the section above.
+5. Run `npm install`.
+6. Run `npm run build`.
+7. Restart the Node.js app.
+
+If cPanel exposes an app URL like `/nodeapp`, configure the domain/subdomain document root or proxy to the Node.js app according to your hosting provider.
+
+## 7. Nginx Reverse Proxy
 
 Example:
 
@@ -109,7 +157,7 @@ server {
 }
 ```
 
-## 6. First Login
+## 8. First Login
 
 Open your domain and login with:
 
@@ -118,15 +166,14 @@ Open your domain and login with:
 
 Then create named admin/member users from `Pengaturan`.
 
-## 7. Backup
+## 9. Backup
 
-Back up `DATA_DIR` regularly. It contains:
+Back up the MySQL database regularly. It contains:
 
-- `users.json`
-- `events.json`
-- `settings.json`
+- `em_users`
+- `em_app_data`
 
-## 8. Health Check
+## 10. Health Check
 
 Use:
 

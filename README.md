@@ -4,6 +4,7 @@ Production-ready event management app with:
 
 - React/Vite frontend
 - Node.js backend
+- MySQL database storage
 - `HttpOnly` cookie authentication
 - Hashed user passwords
 - Backend APIs for users, events, and settings

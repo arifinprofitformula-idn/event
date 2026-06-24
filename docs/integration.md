@@ -48,7 +48,7 @@ Security behavior:
 - Login has basic IP rate limiting.
 - Production requires `AUTH_SECRET`.
 - First production boot requires `ADMIN_PASSWORD`.
-- Event and settings data are now stored through backend APIs.
+- Users, events, and settings are stored in MySQL.
 
 Production environment example:
 
@@ -58,8 +58,12 @@ PORT=3000
 AUTH_SECRET=replace-with-a-long-random-secret
 ADMIN_EMAIL=owner@example.com
 ADMIN_PASSWORD=replace-with-a-strong-initial-password
-DATA_DIR=/secure/path/event-manager-data
 SESSION_HOURS=8
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=your_mysql_user
+DB_PASSWORD=your_mysql_password
+DB_NAME=your_mysql_database
 ```
 
 Run:
@@ -72,6 +76,6 @@ npm start
 Important:
 
 - Put the app behind HTTPS. The server marks cookies as `Secure` in `NODE_ENV=production`.
-- Keep `DATA_DIR` outside the public web root.
+- Create a MySQL database and user before first boot.
 - Rotate the initial admin password after first login by creating a new admin or updating users through the API/UI.
 - Read [deploy-production.md](./deploy-production.md) for live server steps.

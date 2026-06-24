@@ -1,16 +1,29 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import mysql from "mysql2/promise";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const rootDir = resolve(__dirname, "..");
 const distDir = resolve(rootDir, "dist");
-const dataDir = resolve(process.env.DATA_DIR || join(rootDir, "data"));
-const usersFile = join(dataDir, "users.json");
-const eventsFile = join(dataDir, "events.json");
-const settingsFile = join(dataDir, "settings.json");
+
+const loadDotEnv = () => {
+  const envPath = join(rootDir, ".env");
+  if (!existsSync(envPath)) return;
+  const lines = readFileSync(envPath, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+    const [key, ...valueParts] = trimmed.split("=");
+    if (process.env[key]) continue;
+    process.env[key] = valueParts.join("=").replace(/^["']|["']$/g, "");
+  }
+};
+
+loadDotEnv();
+
 const port = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === "production";
 const authSecret = process.env.AUTH_SECRET || "dev-only-change-this-secret";
@@ -20,34 +33,22 @@ if (isProduction && authSecret === "dev-only-change-this-secret") {
   throw new Error("AUTH_SECRET must be set in production.");
 }
 
-mkdirSync(dataDir, { recursive: true });
-
-const json = (res, status, body, extraHeaders = {}) => {
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    ...securityHeaders(),
-    ...extraHeaders
-  });
-  res.end(JSON.stringify(body));
+const dbConfig = {
+  host: process.env.DB_HOST || "127.0.0.1",
+  port: Number(process.env.DB_PORT || 3306),
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASSWORD || "",
+  database: process.env.DB_NAME || "event_manager",
+  waitForConnections: true,
+  connectionLimit: Number(process.env.DB_CONNECTION_LIMIT || 10),
+  charset: "utf8mb4"
 };
 
-const securityHeaders = () => ({
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
-  "Referrer-Policy": "same-origin",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "Cache-Control": "no-store"
-});
+if (process.env.DB_SSL === "true") {
+  dbConfig.ssl = { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" };
+}
 
-const publicUser = (user) => ({
-  id: user.id,
-  name: user.name,
-  email: user.email,
-  role: user.role,
-  active: user.active,
-  createdAt: user.createdAt,
-  updatedAt: user.updatedAt
-});
+const db = mysql.createPool(dbConfig);
 
 const defaultSettings = {
   members: ["Coach Arifin", "Marcom Lead", "Marcom Content", "Marcom Ops", "Operator Zoom", "Product Team"],
@@ -60,14 +61,34 @@ const defaultSettings = {
   }
 };
 
-const readDataFile = (file, fallbackValue) => {
-  if (!existsSync(file)) writeFileSync(file, JSON.stringify(fallbackValue, null, 2));
-  return JSON.parse(readFileSync(file, "utf8"));
+const securityHeaders = () => ({
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Cache-Control": "no-store"
+});
+
+const json = (res, status, body, extraHeaders = {}) => {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    ...securityHeaders(),
+    ...extraHeaders
+  });
+  res.end(JSON.stringify(body));
 };
 
-const writeDataFile = (file, value) => {
-  writeFileSync(file, JSON.stringify(value, null, 2));
-};
+const toIso = (value) => value ? new Date(value).toISOString() : undefined;
+
+const publicUser = (user) => ({
+  id: user.id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  active: Boolean(user.active),
+  createdAt: toIso(user.created_at || user.createdAt),
+  updatedAt: toIso(user.updated_at || user.updatedAt)
+});
 
 const readJsonBody = (req) => new Promise((resolveBody, reject) => {
   let raw = "";
@@ -141,39 +162,44 @@ const verifyPassword = (password, passwordHash) => {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 };
 
-const loadUsers = () => {
-  if (!existsSync(usersFile)) {
-    const adminPassword = process.env.ADMIN_PASSWORD || (isProduction ? null : "admin123");
-    if (!adminPassword) throw new Error("ADMIN_PASSWORD must be set for first production boot.");
-    const admin = {
-      id: randomBytes(16).toString("hex"),
-      name: process.env.ADMIN_NAME || "Administrator",
-      email: (process.env.ADMIN_EMAIL || "admin@event.local").toLowerCase(),
-      passwordHash: hashPassword(adminPassword),
-      role: "admin",
-      active: true,
-      createdAt: new Date().toISOString()
-    };
-    writeFileSync(usersFile, JSON.stringify([admin], null, 2));
+const getUserById = async (id) => {
+  const [rows] = await db.execute("SELECT * FROM em_users WHERE id = ? LIMIT 1", [id]);
+  return rows[0] || null;
+};
+
+const getUserByEmail = async (email) => {
+  const [rows] = await db.execute("SELECT * FROM em_users WHERE email = ? LIMIT 1", [email]);
+  return rows[0] || null;
+};
+
+const loadAppData = async (key, fallbackValue) => {
+  const [rows] = await db.execute("SELECT data_json FROM em_app_data WHERE data_key = ? LIMIT 1", [key]);
+  if (!rows[0]) {
+    await saveAppData(key, fallbackValue);
+    return fallbackValue;
   }
-
-  return JSON.parse(readFileSync(usersFile, "utf8"));
+  return JSON.parse(rows[0].data_json);
 };
 
-const saveUsers = (users) => {
-  writeFileSync(usersFile, JSON.stringify(users, null, 2));
+const saveAppData = async (key, value) => {
+  await db.execute(
+    `INSERT INTO em_app_data (data_key, data_json, updated_at)
+     VALUES (?, ?, NOW())
+     ON DUPLICATE KEY UPDATE data_json = VALUES(data_json), updated_at = NOW()`,
+    [key, JSON.stringify(value)]
+  );
 };
 
-const currentSession = (req) => {
+const currentSession = async (req) => {
   const session = verifyToken(parseCookies(req).em_session);
   if (!session) return null;
-  const user = loadUsers().find((item) => item.id === session.userId && item.active);
-  if (!user) return null;
+  const user = await getUserById(session.userId);
+  if (!user || !user.active) return null;
   return { ...publicUser(user), loginAt: session.loginAt };
 };
 
-const requireAuth = (req, res) => {
-  const session = currentSession(req);
+const requireAuth = async (req, res) => {
+  const session = await currentSession(req);
   if (!session) {
     json(res, 401, { message: "Unauthorized" });
     return null;
@@ -181,8 +207,8 @@ const requireAuth = (req, res) => {
   return session;
 };
 
-const requireAdmin = (req, res) => {
-  const session = requireAuth(req, res);
+const requireAdmin = async (req, res) => {
+  const session = await requireAuth(req, res);
   if (!session) return null;
   if (session.role !== "admin") {
     json(res, 403, { message: "Forbidden" });
@@ -203,9 +229,53 @@ const isRateLimited = (key) => {
 const validatePassword = (password) => typeof password === "string" && password.length >= 8;
 const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || ""));
 
+const initDatabase = async () => {
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS em_users (
+      id VARCHAR(64) PRIMARY KEY,
+      name VARCHAR(160) NOT NULL,
+      email VARCHAR(190) NOT NULL UNIQUE,
+      password_hash VARCHAR(255) NOT NULL,
+      role ENUM('admin', 'member') NOT NULL DEFAULT 'member',
+      active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_em_users_active (active),
+      INDEX idx_em_users_role (role)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS em_app_data (
+      data_key VARCHAR(64) PRIMARY KEY,
+      data_json LONGTEXT NOT NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  const [[userCount]] = await db.query("SELECT COUNT(*) AS total FROM em_users");
+  if (Number(userCount.total) === 0) {
+    const adminPassword = process.env.ADMIN_PASSWORD || (isProduction ? null : "admin123");
+    if (!adminPassword) throw new Error("ADMIN_PASSWORD must be set for first production boot.");
+    await db.execute(
+      `INSERT INTO em_users (id, name, email, password_hash, role, active, created_at)
+       VALUES (?, ?, ?, ?, 'admin', 1, NOW())`,
+      [
+        randomBytes(16).toString("hex"),
+        process.env.ADMIN_NAME || "Administrator",
+        (process.env.ADMIN_EMAIL || "admin@event.local").toLowerCase(),
+        hashPassword(adminPassword)
+      ]
+    );
+  }
+
+  await loadAppData("events", []);
+  await loadAppData("settings", defaultSettings);
+};
+
 const handleApi = async (req, res, url) => {
   if (req.method === "GET" && url.pathname === "/api/auth/session") {
-    return json(res, 200, { session: currentSession(req) });
+    return json(res, 200, { session: await currentSession(req) });
   }
 
   if (req.method === "POST" && url.pathname === "/api/auth/login") {
@@ -215,9 +285,9 @@ const handleApi = async (req, res, url) => {
     const body = await readJsonBody(req);
     const email = String(body.email || "").trim().toLowerCase();
     const password = String(body.password || "");
-    const user = loadUsers().find((item) => item.active && item.email === email);
+    const user = await getUserByEmail(email);
 
-    if (!user || !verifyPassword(password, user.passwordHash)) {
+    if (!user || !user.active || !verifyPassword(password, user.password_hash)) {
       return json(res, 401, { message: "Email atau password tidak sesuai." });
     }
 
@@ -237,12 +307,13 @@ const handleApi = async (req, res, url) => {
   }
 
   if (req.method === "GET" && url.pathname === "/api/users") {
-    if (!requireAdmin(req, res)) return;
-    return json(res, 200, { users: loadUsers().map(publicUser) });
+    if (!await requireAdmin(req, res)) return;
+    const [users] = await db.execute("SELECT * FROM em_users ORDER BY created_at ASC");
+    return json(res, 200, { users: users.map(publicUser) });
   }
 
   if (req.method === "POST" && url.pathname === "/api/users") {
-    if (!requireAdmin(req, res)) return;
+    if (!await requireAdmin(req, res)) return;
     const body = await readJsonBody(req);
     const email = String(body.email || "").trim().toLowerCase();
     const password = String(body.password || "");
@@ -251,80 +322,86 @@ const handleApi = async (req, res, url) => {
       return json(res, 400, { message: "Nama, email valid, dan password minimal 8 karakter wajib diisi." });
     }
 
-    const users = loadUsers();
-    if (users.some((user) => user.email === email)) return json(res, 409, { message: "Email sudah terdaftar." });
+    if (await getUserByEmail(email)) return json(res, 409, { message: "Email sudah terdaftar." });
 
     const user = {
       id: randomBytes(16).toString("hex"),
       name: String(body.name).trim(),
       email,
-      passwordHash: hashPassword(password),
       role: body.role === "admin" ? "admin" : "member",
-      active: true,
-      createdAt: new Date().toISOString()
+      active: true
     };
-    users.push(user);
-    saveUsers(users);
+    await db.execute(
+      `INSERT INTO em_users (id, name, email, password_hash, role, active, created_at)
+       VALUES (?, ?, ?, ?, ?, 1, NOW())`,
+      [user.id, user.name, user.email, hashPassword(password), user.role]
+    );
     return json(res, 201, { user: publicUser(user) });
   }
 
   const userMatch = url.pathname.match(/^\/api\/users\/([^/]+)$/);
   if (userMatch && req.method === "PATCH") {
-    const session = requireAdmin(req, res);
+    const session = await requireAdmin(req, res);
     if (!session) return;
     const body = await readJsonBody(req);
-    const users = loadUsers();
-    const user = users.find((item) => item.id === userMatch[1]);
+    const user = await getUserById(userMatch[1]);
     if (!user) return json(res, 404, { message: "User tidak ditemukan." });
 
     if (body.email && !validateEmail(body.email)) return json(res, 400, { message: "Email tidak valid." });
     if (body.password && !validatePassword(body.password)) return json(res, 400, { message: "Password minimal 8 karakter." });
-    if (body.email && users.some((item) => item.id !== user.id && item.email === String(body.email).trim().toLowerCase())) {
-      return json(res, 409, { message: "Email sudah terdaftar." });
+    if (body.email) {
+      const existing = await getUserByEmail(String(body.email).trim().toLowerCase());
+      if (existing && existing.id !== user.id) return json(res, 409, { message: "Email sudah terdaftar." });
     }
 
-    if (body.name !== undefined) user.name = String(body.name).trim();
-    if (body.email !== undefined) user.email = String(body.email).trim().toLowerCase();
-    if (body.role !== undefined) user.role = body.role === "admin" ? "admin" : "member";
-    if (body.active !== undefined && user.id !== session.id) user.active = Boolean(body.active);
-    if (body.password) user.passwordHash = hashPassword(String(body.password));
-    user.updatedAt = new Date().toISOString();
-    saveUsers(users);
-    return json(res, 200, { user: publicUser(user) });
+    const patch = {
+      name: body.name !== undefined ? String(body.name).trim() : user.name,
+      email: body.email !== undefined ? String(body.email).trim().toLowerCase() : user.email,
+      role: body.role !== undefined ? (body.role === "admin" ? "admin" : "member") : user.role,
+      active: body.active !== undefined && user.id !== session.id ? Boolean(body.active) : Boolean(user.active),
+      passwordHash: body.password ? hashPassword(String(body.password)) : user.password_hash
+    };
+
+    await db.execute(
+      `UPDATE em_users
+       SET name = ?, email = ?, role = ?, active = ?, password_hash = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [patch.name, patch.email, patch.role, patch.active ? 1 : 0, patch.passwordHash, user.id]
+    );
+    return json(res, 200, { user: publicUser({ ...user, ...patch, password_hash: patch.passwordHash }) });
   }
 
   if (userMatch && req.method === "DELETE") {
-    const session = requireAdmin(req, res);
+    const session = await requireAdmin(req, res);
     if (!session) return;
     if (userMatch[1] === session.id) return json(res, 400, { message: "Tidak bisa menghapus user sendiri." });
-    const users = loadUsers();
-    saveUsers(users.filter((item) => item.id !== userMatch[1]));
+    await db.execute("DELETE FROM em_users WHERE id = ?", [userMatch[1]]);
     return json(res, 200, { ok: true });
   }
 
   if (req.method === "GET" && url.pathname === "/api/events") {
-    if (!requireAuth(req, res)) return;
-    return json(res, 200, { events: readDataFile(eventsFile, []) });
+    if (!await requireAuth(req, res)) return;
+    return json(res, 200, { events: await loadAppData("events", []) });
   }
 
   if (req.method === "PUT" && url.pathname === "/api/events") {
-    if (!requireAuth(req, res)) return;
+    if (!await requireAuth(req, res)) return;
     const body = await readJsonBody(req);
     if (!Array.isArray(body.events)) return json(res, 400, { message: "events must be an array." });
-    writeDataFile(eventsFile, body.events);
+    await saveAppData("events", body.events);
     return json(res, 200, { events: body.events });
   }
 
   if (req.method === "GET" && url.pathname === "/api/settings") {
-    if (!requireAuth(req, res)) return;
-    return json(res, 200, { settings: readDataFile(settingsFile, defaultSettings) });
+    if (!await requireAuth(req, res)) return;
+    return json(res, 200, { settings: await loadAppData("settings", defaultSettings) });
   }
 
   if (req.method === "PUT" && url.pathname === "/api/settings") {
-    if (!requireAuth(req, res)) return;
+    if (!await requireAuth(req, res)) return;
     const body = await readJsonBody(req);
     if (!body.settings || typeof body.settings !== "object") return json(res, 400, { message: "settings object is required." });
-    writeDataFile(settingsFile, body.settings);
+    await saveAppData("settings", body.settings);
     return json(res, 200, { settings: body.settings });
   }
 
@@ -356,6 +433,8 @@ const serveStatic = (req, res, url) => {
   });
   createReadStream(filePath).pipe(res);
 };
+
+await initDatabase();
 
 createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
