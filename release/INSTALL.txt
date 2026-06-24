@@ -1,0 +1,11 @@
+Event Manager PHP/MySQL Install
+
+1. Upload all files in this release folder to the subdomain document root.
+2. Create a MySQL database and user in cPanel.
+3. Copy api/config.example.php to api/config.php.
+4. Edit api/config.php with database credentials and initial admin login.
+5. Open https://your-domain/api/auth/session.
+   Expected before login: {"session":null}
+6. Open https://your-domain/ and login with the admin credentials from config.php.
+
+Do not leave admin_password weak. After first login, create a new admin user and rotate credentials.

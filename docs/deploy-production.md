@@ -1,188 +1,235 @@
-# Production Deploy Guide
+# Shared Hosting Deploy Guide (PHP + MySQL)
 
-This app is now a Node.js production app:
+Panduan ini untuk shared hosting cPanel/LiteSpeed/Apache tanpa Node.js App.
 
-- React/Vite frontend is built into `dist/`.
-- `server/index.js` serves the frontend and backend API.
-- Auth uses hashed passwords and `HttpOnly` signed cookies.
-- Events, settings, and users are stored in MySQL.
+Arsitektur production:
 
-## 1. Server Requirements
+- Frontend React di-build menjadi static files.
+- Backend API memakai PHP di folder `api/`.
+- Database memakai MySQL.
+- Hosting melayani folder `release/`, bukan source project mentah.
 
-- Node.js 20 or newer.
-- MySQL 5.7+/8.0+ or MariaDB 10.3+.
-- HTTPS reverse proxy such as Nginx/Caddy/Apache.
-- For shared hosting, the hosting account must support Node.js apps. Static/PHP-only hosting is not enough.
+## Alur GitHub + Git Pull Di Hosting
 
-## 2. Upload Files
+Jika terminal hosting hanya bisa `git pull` dan tidak bisa menjalankan `npm install` / `npm run release`, gunakan alur ini:
 
-Upload the project folder to your server, excluding:
+1. Build release di local.
+2. Commit folder `release/` ke GitHub.
+3. Di hosting, jalankan `git pull`.
+4. Document root subdomain diarahkan ke folder `release/`.
 
-- `node_modules/`
-- `dist/` if you will build on the server
-- `data/`
-- `.env`
-- log files
+Dengan alur ini, hosting tidak perlu Node.js dan tidak perlu build.
 
-Then run:
+File rahasia tetap tidak ikut repo:
+
+```text
+api/config.php
+release/api/config.php
+```
+
+Keduanya sudah di-ignore oleh `.gitignore`.
+
+Di hosting, buat `release/api/config.php` sekali saja. File itu tidak akan tertimpa oleh `git pull` selama tidak pernah dicommit.
+
+## 1. Requirement Hosting
+
+- PHP 8.1+ dengan extension `pdo_mysql`.
+- MySQL 5.7+/8.0+ atau MariaDB 10.3+.
+- Apache/LiteSpeed dengan `.htaccess` dan `mod_rewrite` aktif.
+- Subdomain/domain document root yang bisa kamu isi file.
+
+Tidak perlu Node.js di server hosting.
+
+## 2. Buat Database MySQL
+
+Di cPanel:
+
+1. Buka MySQL Databases.
+2. Buat database, contoh: `cpaneluser_event_manager`.
+3. Buat user database, contoh: `cpaneluser_event_user`.
+4. Set password kuat.
+5. Assign user ke database dengan `ALL PRIVILEGES`.
+
+Tabel akan dibuat otomatis saat API pertama kali dipanggil. Jika hosting memblokir `CREATE TABLE`, import file:
+
+```text
+mysql-schema.sql
+```
+
+File ini ikut tersedia di folder `release/`.
+
+## 3. Build Paket Release Di Lokal
+
+Jalankan di komputer lokal/project:
 
 ```bash
 npm install
-npm run build
+npm run release
 ```
 
-If your shared hosting builds dependencies through cPanel Node.js App, upload the full project and run `npm install` from the Node app terminal.
+Perintah ini akan:
 
-## 3. MySQL Database
+1. Menjalankan `npm run build`.
+2. Membuat folder `release/`.
+3. Menyalin static frontend, `api/`, `.htaccess`, dan schema SQL.
 
-Create a MySQL database and user in cPanel or your hosting control panel.
+Setelah itu commit perubahan termasuk folder `release/`:
 
-Example values:
+```bash
+git add .
+git commit -m "Build production release"
+git push
+```
 
-- Database: `cpaneluser_event_manager`
-- User: `cpaneluser_event_user`
-- Password: strong generated password
-- Host: usually `localhost`
+Di hosting:
 
-Give the user full privileges on the database.
+```bash
+git pull
+```
 
-The app creates tables automatically on first boot. If your host blocks `CREATE TABLE`, import:
+## 4. Setup Document Root cPanel
+
+Untuk alur GitHub, arahkan document root subdomain ke folder:
 
 ```text
-docs/mysql-schema.sql
+.../nama-repo/release
 ```
 
-## 4. Environment Variables
-
-Create a production environment file or set these variables in your process manager:
-
-```bash
-NODE_ENV=production
-PORT=3000
-AUTH_SECRET=replace-with-a-long-random-secret-at-least-32-chars
-ADMIN_NAME=Administrator
-ADMIN_EMAIL=owner@example.com
-ADMIN_PASSWORD=replace-with-a-strong-initial-password
-SESSION_HOURS=8
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=cpaneluser_event_user
-DB_PASSWORD=your_mysql_password
-DB_NAME=cpaneluser_event_manager
-DB_CONNECTION_LIMIT=10
-DB_SSL=false
-```
-
-Important:
-
-- `AUTH_SECRET` must remain stable, otherwise existing sessions become invalid.
-- `ADMIN_PASSWORD` is used only when the `em_users` table has no users yet.
-- Do not commit real database credentials.
-- Back up your MySQL database regularly.
-
-## 5. Start The App
-
-Basic:
-
-```bash
-npm start
-```
-
-Recommended with PM2:
-
-```bash
-npm install -g pm2
-pm2 start server/index.js --name event-manager
-pm2 save
-pm2 startup
-```
-
-With environment file:
-
-```bash
-pm2 start server/index.js --name event-manager --env production
-```
-
-Or create an `ecosystem.config.cjs` if your host supports PM2 config.
-
-## 6. Shared Hosting / cPanel Node.js App
-
-Typical setup:
-
-1. Create a Node.js app in cPanel.
-2. Set Application root to the uploaded project folder.
-3. Set Application startup file to:
+Contoh:
 
 ```text
-server/index.js
+/home/USER/repositories/event/release
 ```
 
-4. Set environment variables from the section above.
-5. Run `npm install`.
-6. Run `npm run build`.
-7. Restart the Node.js app.
+Pastikan file ini ada di document root:
 
-If cPanel exposes an app URL like `/nodeapp`, configure the domain/subdomain document root or proxy to the Node.js app according to your hosting provider.
-
-## 7. Nginx Reverse Proxy
-
-Example:
-
-```nginx
-server {
-  server_name event.example.com;
-
-  location / {
-    proxy_pass http://127.0.0.1:3000;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-  }
-
-  listen 443 ssl http2;
-  ssl_certificate /etc/letsencrypt/live/event.example.com/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/event.example.com/privkey.pem;
-}
+```text
+index.html
+.htaccess
+api/index.php
+api/config.example.php
 ```
 
-Redirect HTTP to HTTPS:
+## 5. Buat Config PHP
 
-```nginx
-server {
-  listen 80;
-  server_name event.example.com;
-  return 301 https://$host$request_uri;
-}
+Di server hosting:
+
+1. Copy:
+
+```text
+api/config.example.php
 ```
 
-## 8. First Login
+menjadi:
 
-Open your domain and login with:
+```text
+api/config.php
+```
 
-- Email: value of `ADMIN_EMAIL`
-- Password: value of `ADMIN_PASSWORD`
+2. Edit `api/config.php`:
 
-Then create named admin/member users from `Pengaturan`.
+```php
+<?php
+return [
+    'db' => [
+        'host' => 'localhost',
+        'port' => 3306,
+        'name' => 'cpaneluser_event_manager',
+        'user' => 'cpaneluser_event_user',
+        'password' => 'PASSWORD_DATABASE',
+        'charset' => 'utf8mb4',
+    ],
+    'app' => [
+        'admin_name' => 'Administrator',
+        'admin_email' => 'owner@example.com',
+        'admin_password' => 'PASSWORD_ADMIN_AWAL',
+        'session_name' => 'em_session',
+        'cookie_secure' => true,
+    ],
+];
+```
 
-## 9. Backup
+Catatan:
 
-Back up the MySQL database regularly. It contains:
+- `admin_password` dipakai hanya saat tabel user masih kosong.
+- Setelah login pertama, buat admin baru atau ubah kredensial.
+- Jangan commit `api/config.php` atau `release/api/config.php`.
+
+## 6. Test API
+
+Buka:
+
+```text
+https://event.arvadigital.web.id/api/auth/session
+```
+
+Jika benar, responsnya:
+
+```json
+{"session":null}
+```
+
+Jika muncul 404 LiteSpeed:
+
+- `.htaccess` belum terbaca,
+- file belum diupload ke document root yang benar,
+- atau subdomain masih mengarah ke folder lain.
+
+Jika muncul error database:
+
+- cek host, database, user, password,
+- pastikan user database punya privilege,
+- cek PHP extension `pdo_mysql`.
+
+## 7. Login
+
+Buka:
+
+```text
+https://event.arvadigital.web.id/
+```
+
+Login dengan:
+
+- Email: nilai `admin_email`
+- Password: nilai `admin_password`
+
+## 8. Backup
+
+Backup database MySQL secara rutin.
+
+Tabel utama:
 
 - `em_users`
 - `em_app_data`
 
-## 10. Health Check
+## 9. Troubleshooting Blank Page
 
-Use:
+View source halaman. Production yang benar harus memuat asset seperti:
 
-```bash
-curl -i https://event.example.com/api/auth/session
+```html
+<script type="module" crossorigin src="/assets/index-xxxxx.js"></script>
 ```
 
-Expected response before login:
+Jika masih ada:
 
-```json
-{"session":null}
+```html
+<script type="module" src="/src/main.jsx"></script>
+```
+
+berarti kamu mengupload source project mentah, bukan isi folder `release/`.
+
+Solusi:
+
+```bash
+npm run release
+git add release
+git commit -m "Build release"
+git push
+```
+
+Lalu di hosting:
+
+```bash
+git pull
 ```

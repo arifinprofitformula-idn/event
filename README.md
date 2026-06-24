@@ -3,32 +3,29 @@
 Production-ready event management app with:
 
 - React/Vite frontend
-- Node.js backend
-- MySQL database storage
-- `HttpOnly` cookie authentication
+- PHP/MySQL backend for shared hosting
+- `HttpOnly` PHP session authentication
 - Hashed user passwords
 - Backend APIs for users, events, and settings
 
-## Local Production Run
+## Build Shared Hosting Release
 
 ```bash
 npm install
-npm run build
-npm start
+npm run release
 ```
 
-Open:
+Upload the contents of:
 
 ```text
-http://127.0.0.1:3000
+release/
 ```
 
-Development default admin:
+to your cPanel subdomain document root.
 
-- Email: `admin@event.local`
-- Password: `admin123`
+Then copy `api/config.example.php` to `api/config.php` on the server and set MySQL credentials.
 
-For real production, set environment variables from `.env.example` and read:
+Read:
 
 - `docs/deploy-production.md`
 - `docs/integration.md`

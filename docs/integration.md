@@ -38,44 +38,49 @@ For Google Sheets, use the same repository contract and map rows to the event sc
 
 ## Production Backend
 
-Auth is handled by the Node server in `server/index.js`.
+For shared hosting, auth and data APIs are handled by PHP in `api/index.php`.
 
 Security behavior:
 
 - Passwords are stored as `scrypt` hashes.
-- Sessions are signed server-side tokens stored in an `HttpOnly` cookie.
+- Sessions use PHP server-side sessions with an `HttpOnly` cookie.
 - Admin-only user management is enforced by `/api/users`.
 - Login has basic IP rate limiting.
-- Production requires `AUTH_SECRET`.
-- First production boot requires `ADMIN_PASSWORD`.
+- First production boot uses `admin_password` from `api/config.php`.
 - Users, events, and settings are stored in MySQL.
 
-Production environment example:
+Production config example:
 
-```bash
-NODE_ENV=production
-PORT=3000
-AUTH_SECRET=replace-with-a-long-random-secret
-ADMIN_EMAIL=owner@example.com
-ADMIN_PASSWORD=replace-with-a-strong-initial-password
-SESSION_HOURS=8
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=your_mysql_user
-DB_PASSWORD=your_mysql_password
-DB_NAME=your_mysql_database
+```php
+<?php
+return [
+    'db' => [
+        'host' => 'localhost',
+        'port' => 3306,
+        'name' => 'cpaneluser_event_manager',
+        'user' => 'cpaneluser_event_user',
+        'password' => 'your_mysql_password',
+        'charset' => 'utf8mb4',
+    ],
+    'app' => [
+        'admin_name' => 'Administrator',
+        'admin_email' => 'owner@example.com',
+        'admin_password' => 'replace-with-a-strong-initial-password',
+        'session_name' => 'em_session',
+        'cookie_secure' => true,
+    ],
+];
 ```
 
 Run:
 
 ```bash
-npm run build
-npm start
+npm run release
 ```
 
 Important:
 
-- Put the app behind HTTPS. The server marks cookies as `Secure` in `NODE_ENV=production`.
+- Use HTTPS and keep `cookie_secure` set to `true`.
 - Create a MySQL database and user before first boot.
 - Rotate the initial admin password after first login by creating a new admin or updating users through the API/UI.
 - Read [deploy-production.md](./deploy-production.md) for live server steps.
