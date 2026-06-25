@@ -1,11 +1,24 @@
+let csrfToken = "";
+
+export const setCsrfToken = (token) => {
+  csrfToken = token || "";
+};
+
 const requestJson = async (url, options = {}) => {
+  const method = (options.method || "GET").toUpperCase();
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken) {
+    headers["X-CSRF-Token"] = csrfToken;
+  }
+
   const response = await fetch(url, {
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers,
     ...options
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.message || "Request failed");
+  if (data.csrfToken) setCsrfToken(data.csrfToken);
   return data;
 };
 

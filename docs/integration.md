@@ -68,6 +68,8 @@ return [
         'admin_password' => 'replace-with-a-strong-initial-password',
         'session_name' => 'em_session',
         'cookie_secure' => true,
+        'cookie_samesite' => 'Lax',
+        'session_lifetime_seconds' => 28800,
     ],
 ];
 ```
@@ -83,4 +85,6 @@ Important:
 - Use HTTPS and keep `cookie_secure` set to `true`.
 - Create a MySQL database and user before first boot.
 - Rotate the initial admin password after first login by creating a new admin or updating users through the API/UI.
+- API requests use CSRF protection and PHP `HttpOnly` sessions.
+- Login attempts are rate-limited in MySQL.
 - Read [deploy-production.md](./deploy-production.md) for live server steps.

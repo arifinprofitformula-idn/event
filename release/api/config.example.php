@@ -14,5 +14,7 @@ return [
         'admin_password' => 'replace_with_strong_initial_password',
         'session_name' => 'em_session',
         'cookie_secure' => true,
+        'cookie_samesite' => 'Lax',
+        'session_lifetime_seconds' => 28800,
     ],
 ];

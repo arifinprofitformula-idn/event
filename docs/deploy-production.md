@@ -151,6 +151,8 @@ return [
         'admin_password' => 'PASSWORD_ADMIN_AWAL',
         'session_name' => 'em_session',
         'cookie_secure' => true,
+        'cookie_samesite' => 'Lax',
+        'session_lifetime_seconds' => 28800,
     ],
 ];
 ```
@@ -160,6 +162,8 @@ Catatan:
 - `admin_password` dipakai hanya saat tabel user masih kosong.
 - Setelah login pertama, buat admin baru atau ubah kredensial.
 - Jangan commit `api/config.php` atau `release/api/config.php`.
+- Jangan simpan backup `.sql`, `.zip`, `.bak`, atau `.env` di folder `release/`.
+- `.htaccess` production memblokir akses langsung ke `config.php`.
 
 ## 6. Test API
 

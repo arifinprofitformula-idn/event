@@ -8,15 +8,17 @@ if (!file_exists($configPath)) {
 
 $config = require $configPath;
 $secureCookie = (bool)($config['app']['cookie_secure'] ?? true);
+$sessionLifetime = (int)($config['app']['session_lifetime_seconds'] ?? 28800);
 session_name($config['app']['session_name'] ?? 'em_session');
 session_set_cookie_params([
-    'lifetime' => 0,
+    'lifetime' => $sessionLifetime,
     'path' => '/',
     'secure' => $secureCookie,
     'httponly' => true,
-    'samesite' => 'Lax',
+    'samesite' => $config['app']['cookie_samesite'] ?? 'Lax',
 ]);
 session_start();
+ensureCsrfToken();
 
 $pdo = db($config);
 initDatabase($pdo, $config);
@@ -30,7 +32,8 @@ if ($path === '/') $path = '/';
 try {
     route($pdo, $method, $path);
 } catch (Throwable $error) {
-    respond(500, ['message' => $error->getMessage()]);
+    error_log('[event-manager] ' . $error->getMessage());
+    respond(500, ['message' => 'Data belum berhasil dimuat. Coba refresh atau cek koneksi.']);
 }
 
 function db(array $config): PDO
@@ -70,6 +73,15 @@ function initDatabase(PDO $pdo, array $config): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
 
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS em_login_attempts (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            attempt_key VARCHAR(190) NOT NULL,
+            attempted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_em_login_attempts_key_time (attempt_key, attempted_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
     $count = (int)$pdo->query("SELECT COUNT(*) FROM em_users")->fetchColumn();
     if ($count === 0) {
         $stmt = $pdo->prepare("
@@ -90,23 +102,41 @@ function initDatabase(PDO $pdo, array $config): void
 
 function route(PDO $pdo, string $method, string $path): void
 {
+    if (!in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) {
+        verifyCsrf();
+    }
+
+    if ($method === 'OPTIONS') {
+        respond(204, []);
+    }
+
     if ($method === 'GET' && $path === '/auth/session') {
-        respond(200, ['session' => currentSession($pdo)]);
+        respond(200, ['session' => currentSession($pdo), 'csrfToken' => csrfToken()]);
     }
 
     if ($method === 'POST' && $path === '/auth/login') {
+        $attemptKey = loginAttemptKey();
+        if (isRateLimited($pdo, $attemptKey)) {
+            respond(429, ['message' => 'Terlalu banyak percobaan login. Coba lagi beberapa menit lagi.']);
+        }
+
         $body = body();
         $email = strtolower(trim((string)($body['email'] ?? '')));
         $password = (string)($body['password'] ?? '');
         $user = getUserByEmail($pdo, $email);
 
         if (!$user || !(bool)$user['active'] || !password_verify($password, $user['password_hash'])) {
+            recordLoginAttempt($pdo, $attemptKey);
             respond(401, ['message' => 'Email atau password tidak sesuai.']);
         }
 
+        session_regenerate_id(true);
+        ensureCsrfToken(true);
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['login_at'] = gmdate('c');
-        respond(200, ['session' => publicUser($user) + ['loginAt' => $_SESSION['login_at']]]);
+        $_SESSION['last_seen'] = time();
+        clearLoginAttempts($pdo, $attemptKey);
+        respond(200, ['session' => publicUser($user) + ['loginAt' => $_SESSION['login_at']], 'csrfToken' => csrfToken()]);
     }
 
     if ($method === 'POST' && $path === '/auth/logout') {
@@ -217,7 +247,11 @@ function route(PDO $pdo, string $method, string $path): void
 
 function body(): array
 {
+    $maxBytes = 1024 * 1024;
+    $length = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
+    if ($length > $maxBytes) respond(413, ['message' => 'Payload terlalu besar.']);
     $raw = file_get_contents('php://input') ?: '';
+    if (strlen($raw) > $maxBytes) respond(413, ['message' => 'Payload terlalu besar.']);
     $data = $raw ? json_decode($raw, true) : [];
     if (!is_array($data)) respond(400, ['message' => 'Invalid JSON.']);
     return $data;
@@ -228,6 +262,10 @@ function respond(int $status, array $body): never
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
     header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: DENY');
+    header('Referrer-Policy: same-origin');
+    header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
+    header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     echo json_encode($body);
     exit;
 }
@@ -264,6 +302,16 @@ function publicUser(array $user): array
 function currentSession(PDO $pdo): ?array
 {
     if (empty($_SESSION['user_id'])) return null;
+    $lifetime = 28800;
+    if (!empty($GLOBALS['config']['app']['session_lifetime_seconds'])) {
+        $lifetime = (int)$GLOBALS['config']['app']['session_lifetime_seconds'];
+    }
+    if (!empty($_SESSION['last_seen']) && time() - (int)$_SESSION['last_seen'] > $lifetime) {
+        $_SESSION = [];
+        session_destroy();
+        return null;
+    }
+    $_SESSION['last_seen'] = time();
     $user = getUserById($pdo, (string)$_SESSION['user_id']);
     if (!$user || !(bool)$user['active']) return null;
     return publicUser($user) + ['loginAt' => $_SESSION['login_at'] ?? null];
@@ -317,4 +365,56 @@ function defaultSettings(): array
             'SILVERGRAM' => '',
         ],
     ];
+}
+
+function ensureCsrfToken(bool $rotate = false): void
+{
+    if ($rotate || empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+}
+
+function csrfToken(): string
+{
+    ensureCsrfToken();
+    return (string)$_SESSION['csrf_token'];
+}
+
+function verifyCsrf(): void
+{
+    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    if (!$token || empty($_SESSION['csrf_token']) || !hash_equals((string)$_SESSION['csrf_token'], (string)$token)) {
+        respond(419, ['message' => 'Session keamanan kedaluwarsa. Refresh halaman lalu coba lagi.']);
+    }
+}
+
+function loginAttemptKey(): string
+{
+    $ip = $_SERVER['HTTP_CF_CONNECTING_IP']
+        ?? $_SERVER['HTTP_X_FORWARDED_FOR']
+        ?? $_SERVER['REMOTE_ADDR']
+        ?? 'unknown';
+    $ip = explode(',', (string)$ip)[0];
+    return hash('sha256', trim($ip));
+}
+
+function isRateLimited(PDO $pdo, string $key): bool
+{
+    $stmt = $pdo->prepare("DELETE FROM em_login_attempts WHERE attempted_at < (NOW() - INTERVAL 15 MINUTE)");
+    $stmt->execute();
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM em_login_attempts WHERE attempt_key = ? AND attempted_at >= (NOW() - INTERVAL 15 MINUTE)");
+    $stmt->execute([$key]);
+    return (int)$stmt->fetchColumn() >= 10;
+}
+
+function recordLoginAttempt(PDO $pdo, string $key): void
+{
+    $stmt = $pdo->prepare("INSERT INTO em_login_attempts (attempt_key, attempted_at) VALUES (?, NOW())");
+    $stmt->execute([$key]);
+}
+
+function clearLoginAttempts(PDO $pdo, string $key): void
+{
+    $stmt = $pdo->prepare("DELETE FROM em_login_attempts WHERE attempt_key = ?");
+    $stmt->execute([$key]);
 }
