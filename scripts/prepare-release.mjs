@@ -21,7 +21,7 @@ if (!existsSync(join(root, "dist", "index.html"))) {
 
 await cp(join(root, "dist"), releaseDir, { recursive: true });
 await cp(join(root, "api"), join(releaseDir, "api"), { recursive: true });
-await cp(join(root, ".htaccess"), join(releaseDir, ".htaccess"));
+await cp(join(root, "scripts", "release.htaccess"), join(releaseDir, ".htaccess"));
 await cp(join(root, "docs", "mysql-schema.sql"), join(releaseDir, "mysql-schema.sql"));
 
 if (existingReleaseConfig !== null) {

@@ -6,6 +6,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 import { createEvent, DEFAULT_SETTINGS } from "./model.js";
 import { Dashboard } from "./pages/Dashboard.jsx";
 import { EventDetail } from "./pages/EventDetail.jsx";
+import { Landing } from "./pages/Landing.jsx";
 import { Login } from "./pages/Login.jsx";
 import { Settings } from "./pages/Settings.jsx";
 import { authApi } from "./services/authService.js";
@@ -21,6 +22,7 @@ function App() {
   const [users, setUsers] = useState([]);
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [showLogin, setShowLogin] = useState(false);
   const [view, setView] = useState("dashboard");
   const [activeEvent, setActiveEvent] = useState(null);
   const [filters, setFilters] = useState({ q: "", brand: "Semua", status: "Semua" });
@@ -148,7 +150,7 @@ function App() {
   }
 
   if (!session) {
-    return <Login onLogin={handleLogin} />;
+    return showLogin ? <Login onLogin={handleLogin} /> : <Landing onLogin={() => setShowLogin(true)} />;
   }
 
   if (view === "settings") {

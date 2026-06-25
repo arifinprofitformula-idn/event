@@ -31,6 +31,12 @@ Keduanya sudah di-ignore oleh `.gitignore`.
 
 Di hosting, buat `release/api/config.php` sekali saja. File itu tidak akan tertimpa oleh `git pull` selama tidak pernah dicommit.
 
+Catatan `.htaccess`:
+
+- Root repo tidak perlu `.htaccess`.
+- File rewrite yang dipakai production adalah `release/.htaccess`.
+- Jika hosting punya `.htaccess` sendiri di root repo, biarkan sebagai file lokal/untracked selama document root tetap mengarah ke `release/`.
+
 ## 1. Requirement Hosting
 
 - PHP 8.1+ dengan extension `pdo_mysql`.
